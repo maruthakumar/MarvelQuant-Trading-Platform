@@ -1,0 +1,1582 @@
+# WebSocket API Reference
+
+## Introduction
+
+The Trading Platform WebSocket API provides real-time data streaming and interactive capabilities for trading applications. This guide covers the WebSocket API architecture, connection management, message formats, available channels, authentication, error handling, and best practices for developers integrating with the platform.
+
+## WebSocket API Overview
+
+The WebSocket API enables bidirectional communication between client applications and the Trading Platform, allowing for real-time data streaming and interactive trading capabilities.
+
+### Key Features
+
+- **Real-time Market Data**: Streaming price updates, order book changes, and trade executions
+- **Order Management**: Submit, modify, and cancel orders in real-time
+- **Account Updates**: Receive real-time updates on account balances and positions
+- **Trading Notifications**: Get instant notifications for order executions, fills, and other trading events
+- **Custom Alerts**: Subscribe to custom alert notifications
+- **System Status**: Receive updates on system status and performance
+
+### Architecture
+
+The WebSocket API is built on a scalable, multi-tier architecture:
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│  Client         │     │  API Gateway    │     │  Service Layer  │
+│  Applications   │◄────┤  & Load         │◄────┤  (Microservices)│
+│                 │     │  Balancer       │     │                 │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                        ▲
+                                                        │
+                                                        ▼
+                                               ┌─────────────────┐
+                                               │                 │
+                                               │  Data Sources   │
+                                               │  & Backends     │
+                                               │                 │
+                                               └─────────────────┘
+```
+
+- **Client Applications**: Web browsers, mobile apps, desktop applications, and algorithmic trading systems
+- **API Gateway & Load Balancer**: Handles connection management, authentication, and request routing
+- **Service Layer**: Microservices that process requests and generate responses
+- **Data Sources & Backends**: Market data providers, order management systems, and other backend services
+
+### WebSocket Endpoints
+
+The Trading Platform provides several WebSocket endpoints for different purposes:
+
+| Endpoint | Description | Authentication Required |
+|----------|-------------|------------------------|
+| `wss://api.tradingplatform.example.com/ws/market-data` | Market data streaming | No |
+| `wss://api.tradingplatform.example.com/ws/trading` | Order management and account updates | Yes |
+| `wss://api.tradingplatform.example.com/ws/notifications` | System and user notifications | Yes |
+| `wss://api.tradingplatform.example.com/ws/custom` | Custom data streams and alerts | Yes |
+
+## Connection Management
+
+### Establishing a Connection
+
+To establish a WebSocket connection:
+
+```javascript
+// Example in JavaScript
+const socket = new WebSocket('wss://api.tradingplatform.example.com/ws/market-data');
+
+socket.onopen = (event) => {
+  console.log('Connection established');
+  // Subscribe to channels after connection is established
+};
+
+socket.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  console.log('Data received:', data);
+};
+
+socket.onerror = (error) => {
+  console.error('WebSocket error:', error);
+};
+
+socket.onclose = (event) => {
+  console.log('Connection closed:', event.code, event.reason);
+};
+```
+
+### Authentication
+
+For endpoints requiring authentication, you must authenticate after establishing the connection:
+
+```javascript
+// Example in JavaScript
+const socket = new WebSocket('wss://api.tradingplatform.example.com/ws/trading');
+
+socket.onopen = (event) => {
+  console.log('Connection established');
+  
+  // Authenticate with API key and secret
+  const authMessage = {
+    action: 'authenticate',
+    data: {
+      api_key: 'YOUR_API_KEY',
+      signature: 'YOUR_SIGNATURE',
+      timestamp: Date.now()
+    }
+  };
+  
+  socket.send(JSON.stringify(authMessage));
+};
+
+socket.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  
+  // Check for authentication response
+  if (data.type === 'auth_response') {
+    if (data.status === 'success') {
+      console.log('Authentication successful');
+      // Subscribe to channels after successful authentication
+    } else {
+      console.error('Authentication failed:', data.message);
+    }
+  } else {
+    console.log('Data received:', data);
+  }
+};
+```
+
+The signature is generated by creating an HMAC-SHA256 hash of the concatenated API key and timestamp, using your API secret as the key:
+
+```javascript
+// Example signature generation in JavaScript
+const crypto = require('crypto');
+
+function generateSignature(apiKey, apiSecret, timestamp) {
+  const message = apiKey + timestamp;
+  return crypto.createHmac('sha256', apiSecret).update(message).digest('hex');
+}
+```
+
+### Connection Lifecycle
+
+The WebSocket connection goes through several states during its lifecycle:
+
+1. **Connecting**: Initial state when the connection is being established
+2. **Open**: Connection established and ready for communication
+3. **Authenticated** (if required): User has successfully authenticated
+4. **Subscribed**: Subscribed to one or more data channels
+5. **Closing**: Connection is in the process of closing
+6. **Closed**: Connection has been terminated
+
+### Heartbeats and Keep-Alive
+
+To maintain an active connection and detect disconnections, the Trading Platform uses a heartbeat mechanism:
+
+- The server sends a heartbeat message every 30 seconds
+- Clients should respond with a pong message
+- If no heartbeat is received for 90 seconds, the client should consider the connection lost and attempt to reconnect
+
+```javascript
+// Example heartbeat handling in JavaScript
+socket.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  
+  if (data.type === 'heartbeat') {
+    // Respond with pong
+    const pongMessage = {
+      action: 'pong',
+      data: {
+        timestamp: Date.now()
+      }
+    };
+    socket.send(JSON.stringify(pongMessage));
+  } else {
+    // Process other messages
+    console.log('Data received:', data);
+  }
+};
+```
+
+### Reconnection Strategy
+
+Clients should implement a robust reconnection strategy to handle network issues:
+
+```javascript
+// Example reconnection strategy in JavaScript
+function connect() {
+  const socket = new WebSocket('wss://api.tradingplatform.example.com/ws/market-data');
+  
+  let reconnectAttempts = 0;
+  const maxReconnectAttempts = 10;
+  const baseReconnectDelay = 1000; // 1 second
+  
+  socket.onopen = (event) => {
+    console.log('Connection established');
+    reconnectAttempts = 0;
+    // Subscribe to channels
+  };
+  
+  socket.onclose = (event) => {
+    console.log('Connection closed:', event.code, event.reason);
+    
+    if (reconnectAttempts < maxReconnectAttempts) {
+      reconnectAttempts++;
+      const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts - 1); // Exponential backoff
+      console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+      setTimeout(connect, delay);
+    } else {
+      console.error('Maximum reconnection attempts reached');
+    }
+  };
+  
+  // Other event handlers
+  
+  return socket;
+}
+
+const socket = connect();
+```
+
+## Message Format
+
+All messages exchanged over the WebSocket connection use JSON format.
+
+### Client-to-Server Messages
+
+Messages sent from the client to the server follow this structure:
+
+```json
+{
+  "action": "string",
+  "data": {
+    // Action-specific data
+  },
+  "id": "string"
+}
+```
+
+- **action**: The action to perform (e.g., "subscribe", "unsubscribe", "authenticate")
+- **data**: Action-specific data
+- **id**: Optional client-generated ID for correlating requests with responses
+
+### Server-to-Client Messages
+
+Messages sent from the server to the client follow this structure:
+
+```json
+{
+  "type": "string",
+  "data": {
+    // Type-specific data
+  },
+  "channel": "string",
+  "timestamp": 1625097600000,
+  "id": "string"
+}
+```
+
+- **type**: The message type (e.g., "trade", "orderbook", "account_update")
+- **data**: Type-specific data
+- **channel**: The channel that generated the message
+- **timestamp**: Server timestamp in milliseconds since epoch
+- **id**: Client-generated ID from the request (if applicable)
+
+### Common Message Types
+
+#### Subscription Request
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["trades:AAPL", "orderbook:AAPL:10"]
+  },
+  "id": "sub-1"
+}
+```
+
+#### Subscription Response
+
+```json
+{
+  "type": "subscription_response",
+  "data": {
+    "status": "success",
+    "channels": ["trades:AAPL", "orderbook:AAPL:10"]
+  },
+  "timestamp": 1625097600000,
+  "id": "sub-1"
+}
+```
+
+#### Trade Data
+
+```json
+{
+  "type": "trade",
+  "data": {
+    "symbol": "AAPL",
+    "price": 150.25,
+    "size": 100,
+    "side": "buy",
+    "trade_id": "t-12345",
+    "trade_time": 1625097600000
+  },
+  "channel": "trades:AAPL",
+  "timestamp": 1625097600000
+}
+```
+
+#### Order Book Data
+
+```json
+{
+  "type": "orderbook",
+  "data": {
+    "symbol": "AAPL",
+    "bids": [
+      [150.00, 500],
+      [149.95, 1000],
+      [149.90, 750]
+    ],
+    "asks": [
+      [150.05, 300],
+      [150.10, 800],
+      [150.15, 600]
+    ],
+    "sequence": 12345
+  },
+  "channel": "orderbook:AAPL:10",
+  "timestamp": 1625097600000
+}
+```
+
+#### Order Submission
+
+```json
+{
+  "action": "submit_order",
+  "data": {
+    "symbol": "AAPL",
+    "side": "buy",
+    "type": "limit",
+    "quantity": 100,
+    "price": 150.00,
+    "time_in_force": "gtc"
+  },
+  "id": "order-1"
+}
+```
+
+#### Order Response
+
+```json
+{
+  "type": "order_response",
+  "data": {
+    "status": "accepted",
+    "order_id": "o-67890",
+    "client_id": "order-1",
+    "symbol": "AAPL",
+    "side": "buy",
+    "type": "limit",
+    "quantity": 100,
+    "price": 150.00,
+    "time_in_force": "gtc"
+  },
+  "timestamp": 1625097600000,
+  "id": "order-1"
+}
+```
+
+## Available Channels
+
+The Trading Platform provides various channels for different types of data.
+
+### Market Data Channels
+
+#### Trades Channel
+
+Subscribe to real-time trade executions for a symbol:
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["trades:AAPL"]
+  }
+}
+```
+
+Trade message format:
+
+```json
+{
+  "type": "trade",
+  "data": {
+    "symbol": "AAPL",
+    "price": 150.25,
+    "size": 100,
+    "side": "buy",
+    "trade_id": "t-12345",
+    "trade_time": 1625097600000
+  },
+  "channel": "trades:AAPL",
+  "timestamp": 1625097600000
+}
+```
+
+#### Order Book Channel
+
+Subscribe to order book data for a symbol:
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["orderbook:AAPL:10"]
+  }
+}
+```
+
+The number after the symbol specifies the depth (number of price levels) to receive.
+
+Order book message format:
+
+```json
+{
+  "type": "orderbook",
+  "data": {
+    "symbol": "AAPL",
+    "bids": [
+      [150.00, 500],
+      [149.95, 1000],
+      [149.90, 750]
+    ],
+    "asks": [
+      [150.05, 300],
+      [150.10, 800],
+      [150.15, 600]
+    ],
+    "sequence": 12345
+  },
+  "channel": "orderbook:AAPL:10",
+  "timestamp": 1625097600000
+}
+```
+
+For order book updates, you'll receive either a full snapshot or incremental updates:
+
+```json
+{
+  "type": "orderbook_update",
+  "data": {
+    "symbol": "AAPL",
+    "bids": [
+      [150.00, 600],  // Updated quantity
+      [149.85, 500]   // New price level
+    ],
+    "asks": [
+      [150.05, 0]     // Removed price level
+    ],
+    "sequence": 12346
+  },
+  "channel": "orderbook:AAPL:10",
+  "timestamp": 1625097601000
+}
+```
+
+#### Ticker Channel
+
+Subscribe to ticker updates for a symbol:
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["ticker:AAPL"]
+  }
+}
+```
+
+Ticker message format:
+
+```json
+{
+  "type": "ticker",
+  "data": {
+    "symbol": "AAPL",
+    "last_price": 150.25,
+    "last_size": 100,
+    "bid": 150.20,
+    "ask": 150.30,
+    "volume": 1250000,
+    "daily_change": 2.75,
+    "daily_change_percent": 1.86,
+    "high": 151.00,
+    "low": 148.50,
+    "open": 149.00
+  },
+  "channel": "ticker:AAPL",
+  "timestamp": 1625097600000
+}
+```
+
+#### Candle/OHLC Channel
+
+Subscribe to candle (OHLC) data for a symbol:
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["candles:AAPL:1m"]
+  }
+}
+```
+
+The time interval can be specified as:
+- 1m (1 minute)
+- 5m (5 minutes)
+- 15m (15 minutes)
+- 1h (1 hour)
+- 4h (4 hours)
+- 1d (1 day)
+- 1w (1 week)
+
+Candle message format:
+
+```json
+{
+  "type": "candle",
+  "data": {
+    "symbol": "AAPL",
+    "interval": "1m",
+    "open": 150.00,
+    "high": 150.30,
+    "low": 149.90,
+    "close": 150.25,
+    "volume": 12500,
+    "start_time": 1625097540000,
+    "end_time": 1625097600000
+  },
+  "channel": "candles:AAPL:1m",
+  "timestamp": 1625097600000
+}
+```
+
+### Trading Channels
+
+#### User Orders Channel
+
+Subscribe to updates for your orders:
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["user_orders"]
+  }
+}
+```
+
+Order update message format:
+
+```json
+{
+  "type": "order_update",
+  "data": {
+    "order_id": "o-67890",
+    "client_id": "order-1",
+    "symbol": "AAPL",
+    "side": "buy",
+    "type": "limit",
+    "quantity": 100,
+    "filled_quantity": 50,
+    "remaining_quantity": 50,
+    "price": 150.00,
+    "status": "partially_filled",
+    "time_in_force": "gtc",
+    "created_at": 1625097600000,
+    "updated_at": 1625097630000
+  },
+  "channel": "user_orders",
+  "timestamp": 1625097630000
+}
+```
+
+#### User Trades Channel
+
+Subscribe to your trade executions:
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["user_trades"]
+  }
+}
+```
+
+User trade message format:
+
+```json
+{
+  "type": "user_trade",
+  "data": {
+    "trade_id": "t-12345",
+    "order_id": "o-67890",
+    "symbol": "AAPL",
+    "side": "buy",
+    "price": 150.00,
+    "quantity": 50,
+    "fee": 0.15,
+    "fee_currency": "USD",
+    "trade_time": 1625097630000
+  },
+  "channel": "user_trades",
+  "timestamp": 1625097630000
+}
+```
+
+#### Account Updates Channel
+
+Subscribe to account balance and position updates:
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["account_updates"]
+  }
+}
+```
+
+Account update message format:
+
+```json
+{
+  "type": "account_update",
+  "data": {
+    "account_id": "acc-12345",
+    "balances": [
+      {
+        "currency": "USD",
+        "available": 10000.00,
+        "reserved": 15000.00,
+        "total": 25000.00
+      },
+      {
+        "currency": "BTC",
+        "available": 1.5,
+        "reserved": 0.0,
+        "total": 1.5
+      }
+    ],
+    "positions": [
+      {
+        "symbol": "AAPL",
+        "quantity": 150,
+        "average_price": 149.75,
+        "unrealized_pnl": 75.00,
+        "realized_pnl": 0.00
+      }
+    ]
+  },
+  "channel": "account_updates",
+  "timestamp": 1625097630000
+}
+```
+
+### Notification Channels
+
+#### System Notifications Channel
+
+Subscribe to system-wide notifications:
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["system_notifications"]
+  }
+}
+```
+
+System notification message format:
+
+```json
+{
+  "type": "system_notification",
+  "data": {
+    "id": "n-12345",
+    "level": "info",
+    "title": "Market Hours Update",
+    "message": "The market will close early at 1:00 PM EST on July 3rd.",
+    "link": "https://tradingplatform.example.com/notices/12345"
+  },
+  "channel": "system_notifications",
+  "timestamp": 1625097600000
+}
+```
+
+#### User Notifications Channel
+
+Subscribe to user-specific notifications:
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["user_notifications"]
+  }
+}
+```
+
+User notification message format:
+
+```json
+{
+  "type": "user_notification",
+  "data": {
+    "id": "n-67890",
+    "level": "warning",
+    "title": "Margin Call Warning",
+    "message": "Your account is approaching margin call levels. Please deposit additional funds or reduce positions.",
+    "link": "https://tradingplatform.example.com/account/margin"
+  },
+  "channel": "user_notifications",
+  "timestamp": 1625097600000
+}
+```
+
+### Custom Alert Channels
+
+Subscribe to custom alerts that you've configured:
+
+```json
+{
+  "action": "subscribe",
+  "data": {
+    "channels": ["custom_alerts"]
+  }
+}
+```
+
+Custom alert message format:
+
+```json
+{
+  "type": "custom_alert",
+  "data": {
+    "alert_id": "a-12345",
+    "name": "AAPL Price Alert",
+    "condition": "price_above",
+    "symbol": "AAPL",
+    "threshold": 150.00,
+    "current_value": 150.25,
+    "triggered_at": 1625097600000
+  },
+  "channel": "custom_alerts",
+  "timestamp": 1625097600000
+}
+```
+
+## Order Management
+
+The WebSocket API provides real-time order management capabilities.
+
+### Submitting Orders
+
+To submit a new order:
+
+```json
+{
+  "action": "submit_order",
+  "data": {
+    "symbol": "AAPL",
+    "side": "buy",
+    "type": "limit",
+    "quantity": 100,
+    "price": 150.00,
+    "time_in_force": "gtc",
+    "client_order_id": "my-order-123"
+  },
+  "id": "order-1"
+}
+```
+
+Order types:
+- `market`: Market order
+- `limit`: Limit order
+- `stop`: Stop order
+- `stop_limit`: Stop-limit order
+
+Time in force options:
+- `gtc`: Good Till Canceled
+- `ioc`: Immediate or Cancel
+- `fok`: Fill or Kill
+- `day`: Day order (expires at end of trading day)
+
+### Canceling Orders
+
+To cancel an existing order:
+
+```json
+{
+  "action": "cancel_order",
+  "data": {
+    "order_id": "o-67890"
+  },
+  "id": "cancel-1"
+}
+```
+
+Or cancel by client order ID:
+
+```json
+{
+  "action": "cancel_order",
+  "data": {
+    "client_order_id": "my-order-123"
+  },
+  "id": "cancel-1"
+}
+```
+
+### Modifying Orders
+
+To modify an existing order:
+
+```json
+{
+  "action": "modify_order",
+  "data": {
+    "order_id": "o-67890",
+    "quantity": 200,
+    "price": 149.50
+  },
+  "id": "modify-1"
+}
+```
+
+### Batch Operations
+
+To perform multiple order operations in a single request:
+
+```json
+{
+  "action": "batch_orders",
+  "data": {
+    "operations": [
+      {
+        "operation": "submit",
+        "symbol": "AAPL",
+        "side": "buy",
+        "type": "limit",
+        "quantity": 100,
+        "price": 150.00,
+        "time_in_force": "gtc",
+        "client_order_id": "my-order-123"
+      },
+      {
+        "operation": "cancel",
+        "order_id": "o-67890"
+      }
+    ]
+  },
+  "id": "batch-1"
+}
+```
+
+## Error Handling
+
+The WebSocket API uses a consistent error format for all error responses.
+
+### Error Response Format
+
+```json
+{
+  "type": "error",
+  "data": {
+    "code": "invalid_parameter",
+    "message": "Invalid parameter: price must be greater than 0",
+    "request_id": "order-1",
+    "request_action": "submit_order"
+  },
+  "timestamp": 1625097600000,
+  "id": "order-1"
+}
+```
+
+### Common Error Codes
+
+| Error Code | Description |
+|------------|-------------|
+| `authentication_required` | Authentication is required for this action |
+| `invalid_credentials` | Invalid API key or signature |
+| `invalid_parameter` | One or more parameters are invalid |
+| `invalid_action` | The requested action is not valid |
+| `rate_limit_exceeded` | Rate limit has been exceeded |
+| `insufficient_funds` | Insufficient funds to perform the requested action |
+| `order_not_found` | The specified order was not found |
+| `duplicate_client_order_id` | The client order ID is already in use |
+| `market_closed` | The market is currently closed |
+| `internal_error` | An internal server error occurred |
+
+### Handling Connection Errors
+
+WebSocket connection errors are indicated by the WebSocket close codes:
+
+| Close Code | Description | Action |
+|------------|-------------|--------|
+| 1000 | Normal closure | Reconnect if needed |
+| 1001 | Going away | Reconnect |
+| 1006 | Abnormal closure | Reconnect with backoff |
+| 1008 | Policy violation | Check request format and authentication |
+| 1011 | Server error | Reconnect with backoff |
+| 4000 | Authentication failed | Check credentials |
+| 4001 | Rate limited | Reconnect with backoff |
+| 4002 | Invalid subscription | Check subscription parameters |
+| 4003 | Duplicate connection | Close other connections |
+| 4004 | Server restarting | Reconnect with backoff |
+
+## Rate Limits
+
+The WebSocket API implements rate limits to ensure fair usage and system stability.
+
+### Connection Limits
+
+- Maximum of 5 concurrent WebSocket connections per API key
+- Maximum of 50 subscriptions per connection
+
+### Message Rate Limits
+
+| Action | Rate Limit |
+|--------|------------|
+| Authentication | 10 per minute |
+| Subscribe/Unsubscribe | 50 per minute |
+| Order Operations | 100 per minute |
+| Other Messages | 200 per minute |
+
+### Rate Limit Errors
+
+When a rate limit is exceeded, you'll receive an error message:
+
+```json
+{
+  "type": "error",
+  "data": {
+    "code": "rate_limit_exceeded",
+    "message": "Rate limit exceeded for order operations. Limit: 100 per minute",
+    "request_id": "order-1",
+    "request_action": "submit_order",
+    "retry_after": 30
+  },
+  "timestamp": 1625097600000,
+  "id": "order-1"
+}
+```
+
+The `retry_after` field indicates the number of seconds to wait before retrying.
+
+## Best Practices
+
+### Connection Management
+
+- Maintain a single WebSocket connection for each type of data you need
+- Implement robust reconnection logic with exponential backoff
+- Handle connection errors gracefully
+- Monitor connection health with heartbeats
+
+### Subscription Management
+
+- Subscribe only to the data you need
+- Group related subscriptions in a single request
+- Unsubscribe from channels you no longer need
+- Resubscribe to all channels after reconnection
+
+### Data Processing
+
+- Process messages asynchronously to avoid blocking the WebSocket connection
+- Implement message queuing for high-volume data
+- Handle out-of-order messages using sequence numbers
+- Validate and sanitize all incoming data
+
+### Order Book Management
+
+- Maintain a local copy of the order book
+- Apply updates in sequence number order
+- Periodically resynchronize with a full snapshot
+- Handle missing sequence numbers by requesting a new snapshot
+
+### Error Handling
+
+- Implement comprehensive error handling for all operations
+- Log errors for troubleshooting
+- Retry failed operations with appropriate backoff
+- Notify users of critical errors
+
+### Performance Optimization
+
+- Use binary WebSocket frames when available
+- Minimize message size by subscribing only to needed data
+- Batch related operations when possible
+- Implement client-side throttling to avoid rate limits
+
+## Code Examples
+
+### JavaScript/Node.js Example
+
+```javascript
+const WebSocket = require('ws');
+const crypto = require('crypto');
+
+class TradingPlatformClient {
+  constructor(apiKey, apiSecret, options = {}) {
+    this.apiKey = apiKey;
+    this.apiSecret = apiSecret;
+    this.options = {
+      baseUrl: 'wss://api.tradingplatform.example.com',
+      reconnect: true,
+      maxReconnectAttempts: 10,
+      reconnectInterval: 1000,
+      ...options
+    };
+    
+    this.connections = {};
+    this.subscriptions = {};
+    this.messageHandlers = {};
+    this.reconnectAttempts = {};
+  }
+  
+  connect(endpoint) {
+    if (this.connections[endpoint]) {
+      return Promise.resolve(this.connections[endpoint]);
+    }
+    
+    const url = `${this.options.baseUrl}${endpoint}`;
+    this.reconnectAttempts[endpoint] = 0;
+    
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(url);
+      
+      socket.onopen = () => {
+        console.log(`Connected to ${url}`);
+        this.connections[endpoint] = socket;
+        
+        if (endpoint !== '/ws/market-data') {
+          this.authenticate(endpoint)
+            .then(() => resolve(socket))
+            .catch(reject);
+        } else {
+          resolve(socket);
+        }
+      };
+      
+      socket.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        
+        if (message.type === 'heartbeat') {
+          this.handleHeartbeat(endpoint);
+        } else if (message.type === 'error') {
+          console.error('Error:', message.data);
+        } else if (this.messageHandlers[message.type]) {
+          this.messageHandlers[message.type](message);
+        }
+      };
+      
+      socket.onerror = (error) => {
+        console.error(`WebSocket error on ${endpoint}:`, error);
+      };
+      
+      socket.onclose = (event) => {
+        console.log(`Connection closed for ${endpoint}:`, event.code, event.reason);
+        delete this.connections[endpoint];
+        
+        if (this.options.reconnect && this.reconnectAttempts[endpoint] < this.options.maxReconnectAttempts) {
+          this.reconnectAttempts[endpoint]++;
+          const delay = this.options.reconnectInterval * Math.pow(2, this.reconnectAttempts[endpoint] - 1);
+          console.log(`Reconnecting to ${endpoint} in ${delay}ms (attempt ${this.reconnectAttempts[endpoint]})`);
+          
+          setTimeout(() => {
+            this.connect(endpoint)
+              .then(() => {
+                // Resubscribe to channels
+                if (this.subscriptions[endpoint]) {
+                  this.subscribe(endpoint, this.subscriptions[endpoint]);
+                }
+              })
+              .catch((err) => console.error(`Reconnection to ${endpoint} failed:`, err));
+          }, delay);
+        }
+      };
+    });
+  }
+  
+  authenticate(endpoint) {
+    const timestamp = Date.now();
+    const signature = this.generateSignature(timestamp);
+    
+    const authMessage = {
+      action: 'authenticate',
+      data: {
+        api_key: this.apiKey,
+        signature: signature,
+        timestamp: timestamp
+      },
+      id: `auth-${timestamp}`
+    };
+    
+    return this.sendMessage(endpoint, authMessage)
+      .then((response) => {
+        if (response.data.status === 'success') {
+          console.log(`Authentication successful for ${endpoint}`);
+          return response;
+        } else {
+          throw new Error(`Authentication failed: ${response.data.message}`);
+        }
+      });
+  }
+  
+  generateSignature(timestamp) {
+    const message = this.apiKey + timestamp;
+    return crypto.createHmac('sha256', this.apiSecret).update(message).digest('hex');
+  }
+  
+  sendMessage(endpoint, message) {
+    return new Promise((resolve, reject) => {
+      if (!this.connections[endpoint]) {
+        return reject(new Error(`No connection for ${endpoint}`));
+      }
+      
+      const messageId = message.id || `msg-${Date.now()}`;
+      message.id = messageId;
+      
+      const responseHandler = (event) => {
+        const response = JSON.parse(event.data);
+        if (response.id === messageId) {
+          this.connections[endpoint].removeEventListener('message', responseHandler);
+          resolve(response);
+        }
+      };
+      
+      this.connections[endpoint].addEventListener('message', responseHandler);
+      this.connections[endpoint].send(JSON.stringify(message));
+      
+      // Set timeout for response
+      setTimeout(() => {
+        this.connections[endpoint].removeEventListener('message', responseHandler);
+        reject(new Error(`Timeout waiting for response to ${message.action}`));
+      }, 10000);
+    });
+  }
+  
+  subscribe(endpoint, channels) {
+    if (!Array.isArray(channels)) {
+      channels = [channels];
+    }
+    
+    this.subscriptions[endpoint] = [...new Set([...(this.subscriptions[endpoint] || []), ...channels])];
+    
+    const subscribeMessage = {
+      action: 'subscribe',
+      data: {
+        channels: channels
+      },
+      id: `sub-${Date.now()}`
+    };
+    
+    return this.sendMessage(endpoint, subscribeMessage);
+  }
+  
+  unsubscribe(endpoint, channels) {
+    if (!Array.isArray(channels)) {
+      channels = [channels];
+    }
+    
+    if (this.subscriptions[endpoint]) {
+      this.subscriptions[endpoint] = this.subscriptions[endpoint].filter(channel => !channels.includes(channel));
+    }
+    
+    const unsubscribeMessage = {
+      action: 'unsubscribe',
+      data: {
+        channels: channels
+      },
+      id: `unsub-${Date.now()}`
+    };
+    
+    return this.sendMessage(endpoint, unsubscribeMessage);
+  }
+  
+  handleHeartbeat(endpoint) {
+    const pongMessage = {
+      action: 'pong',
+      data: {
+        timestamp: Date.now()
+      }
+    };
+    
+    if (this.connections[endpoint]) {
+      this.connections[endpoint].send(JSON.stringify(pongMessage));
+    }
+  }
+  
+  onMessage(type, handler) {
+    this.messageHandlers[type] = handler;
+  }
+  
+  submitOrder(order) {
+    const orderMessage = {
+      action: 'submit_order',
+      data: order,
+      id: `order-${Date.now()}`
+    };
+    
+    return this.sendMessage('/ws/trading', orderMessage);
+  }
+  
+  cancelOrder(orderId) {
+    const cancelMessage = {
+      action: 'cancel_order',
+      data: {
+        order_id: orderId
+      },
+      id: `cancel-${Date.now()}`
+    };
+    
+    return this.sendMessage('/ws/trading', cancelMessage);
+  }
+  
+  close() {
+    Object.keys(this.connections).forEach(endpoint => {
+      if (this.connections[endpoint]) {
+        this.connections[endpoint].close();
+      }
+    });
+  }
+}
+
+// Usage example
+async function main() {
+  const client = new TradingPlatformClient('your-api-key', 'your-api-secret');
+  
+  // Set up message handlers
+  client.onMessage('trade', (message) => {
+    console.log('Trade:', message.data);
+  });
+  
+  client.onMessage('orderbook', (message) => {
+    console.log('Order Book:', message.data);
+  });
+  
+  client.onMessage('order_update', (message) => {
+    console.log('Order Update:', message.data);
+  });
+  
+  // Connect to market data endpoint
+  await client.connect('/ws/market-data');
+  
+  // Subscribe to market data channels
+  await client.subscribe('/ws/market-data', ['trades:AAPL', 'orderbook:AAPL:10']);
+  
+  // Connect to trading endpoint
+  await client.connect('/ws/trading');
+  
+  // Subscribe to trading channels
+  await client.subscribe('/ws/trading', ['user_orders', 'user_trades']);
+  
+  // Submit an order
+  const orderResult = await client.submitOrder({
+    symbol: 'AAPL',
+    side: 'buy',
+    type: 'limit',
+    quantity: 100,
+    price: 150.00,
+    time_in_force: 'gtc'
+  });
+  
+  console.log('Order Result:', orderResult);
+  
+  // Keep the process running
+  process.on('SIGINT', () => {
+    console.log('Closing connections');
+    client.close();
+    process.exit();
+  });
+}
+
+main().catch(console.error);
+```
+
+### Python Example
+
+```python
+import json
+import time
+import hmac
+import hashlib
+import threading
+import websocket
+from queue import Queue
+
+class TradingPlatformClient:
+    def __init__(self, api_key, api_secret, options=None):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.options = options or {
+            'base_url': 'wss://api.tradingplatform.example.com',
+            'reconnect': True,
+            'max_reconnect_attempts': 10,
+            'reconnect_interval': 1000
+        }
+        
+        self.connections = {}
+        self.subscriptions = {}
+        self.message_handlers = {}
+        self.reconnect_attempts = {}
+        self.message_queues = {}
+        self.response_events = {}
+        
+    def connect(self, endpoint):
+        if endpoint in self.connections:
+            return
+        
+        url = f"{self.options['base_url']}{endpoint}"
+        self.reconnect_attempts[endpoint] = 0
+        self.message_queues[endpoint] = Queue()
+        self.response_events[endpoint] = {}
+        
+        def on_open(ws):
+            print(f"Connected to {url}")
+            self.connections[endpoint] = ws
+            
+            if endpoint != '/ws/market-data':
+                self.authenticate(endpoint)
+            
+            # Start message processing thread
+            threading.Thread(target=self._process_messages, args=(endpoint,), daemon=True).start()
+        
+        def on_message(ws, message):
+            self.message_queues[endpoint].put(message)
+        
+        def on_error(ws, error):
+            print(f"WebSocket error on {endpoint}: {error}")
+        
+        def on_close(ws, close_status_code, close_msg):
+            print(f"Connection closed for {endpoint}: {close_status_code} {close_msg}")
+            if endpoint in self.connections:
+                del self.connections[endpoint]
+            
+            if self.options['reconnect'] and self.reconnect_attempts[endpoint] < self.options['max_reconnect_attempts']:
+                self.reconnect_attempts[endpoint] += 1
+                delay = self.options['reconnect_interval'] * (2 ** (self.reconnect_attempts[endpoint] - 1))
+                print(f"Reconnecting to {endpoint} in {delay}ms (attempt {self.reconnect_attempts[endpoint]})")
+                
+                time.sleep(delay / 1000)
+                self.connect(endpoint)
+                
+                # Resubscribe to channels
+                if endpoint in self.subscriptions:
+                    self.subscribe(endpoint, self.subscriptions[endpoint])
+        
+        ws = websocket.WebSocketApp(
+            url,
+            on_open=on_open,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close
+        )
+        
+        threading.Thread(target=ws.run_forever, daemon=True).start()
+    
+    def _process_messages(self, endpoint):
+        while True:
+            message = self.message_queues[endpoint].get()
+            data = json.loads(message)
+            
+            if data.get('type') == 'heartbeat':
+                self._handle_heartbeat(endpoint)
+            elif data.get('type') == 'error':
+                print(f"Error: {data.get('data')}")
+            elif data.get('id') in self.response_events[endpoint]:
+                event, response_queue = self.response_events[endpoint][data.get('id')]
+                response_queue.put(data)
+                event.set()
+            elif data.get('type') in self.message_handlers:
+                self.message_handlers[data.get('type')](data)
+    
+    def _handle_heartbeat(self, endpoint):
+        pong_message = {
+            'action': 'pong',
+            'data': {
+                'timestamp': int(time.time() * 1000)
+            }
+        }
+        
+        if endpoint in self.connections:
+            self.connections[endpoint].send(json.dumps(pong_message))
+    
+    def generate_signature(self, timestamp):
+        message = f"{self.api_key}{timestamp}"
+        signature = hmac.new(
+            self.api_secret.encode(),
+            message.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        return signature
+    
+    def authenticate(self, endpoint):
+        timestamp = int(time.time() * 1000)
+        signature = self.generate_signature(timestamp)
+        
+        auth_message = {
+            'action': 'authenticate',
+            'data': {
+                'api_key': self.api_key,
+                'signature': signature,
+                'timestamp': timestamp
+            },
+            'id': f"auth-{timestamp}"
+        }
+        
+        response = self.send_message(endpoint, auth_message)
+        if response.get('data', {}).get('status') == 'success':
+            print(f"Authentication successful for {endpoint}")
+        else:
+            raise Exception(f"Authentication failed: {response.get('data', {}).get('message')}")
+    
+    def send_message(self, endpoint, message):
+        if endpoint not in self.connections:
+            raise Exception(f"No connection for {endpoint}")
+        
+        message_id = message.get('id') or f"msg-{int(time.time() * 1000)}"
+        message['id'] = message_id
+        
+        event = threading.Event()
+        response_queue = Queue()
+        self.response_events[endpoint][message_id] = (event, response_queue)
+        
+        self.connections[endpoint].send(json.dumps(message))
+        
+        # Wait for response with timeout
+        if event.wait(timeout=10):
+            response = response_queue.get()
+            del self.response_events[endpoint][message_id]
+            return response
+        else:
+            del self.response_events[endpoint][message_id]
+            raise Exception(f"Timeout waiting for response to {message.get('action')}")
+    
+    def subscribe(self, endpoint, channels):
+        if not isinstance(channels, list):
+            channels = [channels]
+        
+        if endpoint not in self.subscriptions:
+            self.subscriptions[endpoint] = []
+        
+        self.subscriptions[endpoint] = list(set(self.subscriptions[endpoint] + channels))
+        
+        subscribe_message = {
+            'action': 'subscribe',
+            'data': {
+                'channels': channels
+            },
+            'id': f"sub-{int(time.time() * 1000)}"
+        }
+        
+        return self.send_message(endpoint, subscribe_message)
+    
+    def unsubscribe(self, endpoint, channels):
+        if not isinstance(channels, list):
+            channels = [channels]
+        
+        if endpoint in self.subscriptions:
+            self.subscriptions[endpoint] = [c for c in self.subscriptions[endpoint] if c not in channels]
+        
+        unsubscribe_message = {
+            'action': 'unsubscribe',
+            'data': {
+                'channels': channels
+            },
+            'id': f"unsub-{int(time.time() * 1000)}"
+        }
+        
+        return self.send_message(endpoint, unsubscribe_message)
+    
+    def on_message(self, message_type, handler):
+        self.message_handlers[message_type] = handler
+    
+    def submit_order(self, order):
+        order_message = {
+            'action': 'submit_order',
+            'data': order,
+            'id': f"order-{int(time.time() * 1000)}"
+        }
+        
+        return self.send_message('/ws/trading', order_message)
+    
+    def cancel_order(self, order_id):
+        cancel_message = {
+            'action': 'cancel_order',
+            'data': {
+                'order_id': order_id
+            },
+            'id': f"cancel-{int(time.time() * 1000)}"
+        }
+        
+        return self.send_message('/ws/trading', cancel_message)
+    
+    def close(self):
+        for endpoint, ws in self.connections.items():
+            ws.close()
+
+# Usage example
+if __name__ == "__main__":
+    client = TradingPlatformClient('your-api-key', 'your-api-secret')
+    
+    # Set up message handlers
+    def handle_trade(message):
+        print(f"Trade: {message['data']}")
+    
+    def handle_orderbook(message):
+        print(f"Order Book: {message['data']}")
+    
+    def handle_order_update(message):
+        print(f"Order Update: {message['data']}")
+    
+    client.on_message('trade', handle_trade)
+    client.on_message('orderbook', handle_orderbook)
+    client.on_message('order_update', handle_order_update)
+    
+    # Connect to market data endpoint
+    client.connect('/ws/market-data')
+    
+    # Wait for connection to establish
+    time.sleep(1)
+    
+    # Subscribe to market data channels
+    client.subscribe('/ws/market-data', ['trades:AAPL', 'orderbook:AAPL:10'])
+    
+    # Connect to trading endpoint
+    client.connect('/ws/trading')
+    
+    # Wait for connection to establish
+    time.sleep(1)
+    
+    # Subscribe to trading channels
+    client.subscribe('/ws/trading', ['user_orders', 'user_trades'])
+    
+    # Submit an order
+    try:
+        order_result = client.submit_order({
+            'symbol': 'AAPL',
+            'side': 'buy',
+            'type': 'limit',
+            'quantity': 100,
+            'price': 150.00,
+            'time_in_force': 'gtc'
+        })
+        print(f"Order Result: {order_result}")
+    except Exception as e:
+        print(f"Error submitting order: {e}")
+    
+    # Keep the process running
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Closing connections")
+        client.close()
+```
+
+## Next Steps
+
+Now that you understand the WebSocket API, explore these related guides:
+
+- [REST API Reference](./rest_api_reference.md) - Learn about the REST API endpoints
+- [Authentication Guide](./authentication_guide.md) - Detailed information about authentication
+- [Order Types and Parameters](./order_types.md) - Learn about different order types and parameters
+- [Market Data Guide](./market_data_guide.md) - Detailed information about market data
+- [Error Handling Best Practices](./error_handling.md) - Learn how to handle errors effectively

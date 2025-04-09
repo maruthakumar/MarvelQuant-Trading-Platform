@@ -1,0 +1,30 @@
+{
+		"database": {
+			"host": "localhost",
+			"port": 5432,
+			"user": "test_user",
+			"password": "test_password",
+			"dbname": "test_db"
+		},
+		"redis": {
+			"host": "localhost",
+			"port": 6379
+		},
+		"rabbitmq": {
+			"host": "localhost",
+			"port": 5672,
+			"user": "guest",
+			"password": "guest"
+		},
+		"jwt": {
+			"secret": "test-secret-key",
+			"expiration": 86400
+		},
+		"broker": {
+			"xts": {
+				"endpoint": "https://xts-api.example.com",
+				"api_key": "test-api-key",
+				"api_secret": "test-api-secret"
+			}
+		}
+	}
