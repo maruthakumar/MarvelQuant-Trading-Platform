@@ -80,7 +80,7 @@ const Sidebar = () => {
           {open && (
             <Box 
               component="img"
-              src="/images/MQ-Logo-Main.svg"
+              src="/assets/images/MQ Logo-Main.svg"
               alt="MarvelQuant"
               sx={{ 
                 height: 32, 
